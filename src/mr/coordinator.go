@@ -12,12 +12,12 @@ type Coordinator struct {
 
 }
 
-// Your code here -- RPC handlers for the worker to call.
+// 您在此处的代码 -- 供 Worker 调用的 RPC 处理程序。
 
 //
-// an example RPC handler.
+// RPC 处理程序示例。
 //
-// the RPC argument and reply types are defined in rpc.go.
+// RPC 参数和回复类型在 rpc.go 中定义。
 //
 func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
 	reply.Y = args.X + 1
@@ -25,9 +25,7 @@ func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
 }
 
 
-//
-// start a thread that listens for RPCs from worker.go
-//
+// 启动一个线程，监听来自 worker.go 的 RPCs
 func (c *Coordinator) server() {
 	rpc.Register(c)
 	rpc.HandleHTTP()
@@ -41,10 +39,7 @@ func (c *Coordinator) server() {
 	go http.Serve(l, nil)
 }
 
-//
-// main/mrcoordinator.go calls Done() periodically to find out
-// if the entire job has finished.
-//
+// main/mrcoordinator.go 会定期调用 Done() 来确定整个工作是否已完成。
 func (c *Coordinator) Done() bool {
 	ret := false
 
@@ -55,9 +50,9 @@ func (c *Coordinator) Done() bool {
 }
 
 //
-// create a Coordinator.
-// main/mrcoordinator.go calls this function.
-// nReduce is the number of reduce tasks to use.
+// 创建一个协调员。
+// main/mrcoordinator.go 调用此函数。
+// nReduce 是要使用的还原任务数。
 //
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{}

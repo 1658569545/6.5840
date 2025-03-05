@@ -22,13 +22,13 @@ type ExampleReply struct {
 	Y int
 }
 
-// Add your RPC definitions here.
+// 在此添加 RPC 定义。
 
 
-// Cook up a unique-ish UNIX-domain socket name
-// in /var/tmp, for the coordinator.
-// Can't use the current directory since
-// Athena AFS doesn't support UNIX-domain sockets.
+// 在 /var/tmp 中为协调器创建一个唯一的 UNIX 域套接字名称。
+// 在 /var/tmp 目录中，为协调器命名。
+// 不能使用当前目录，因为
+// Athena AFS 不支持 UNIX 域套接字。
 func coordinatorSock() string {
 	s := "/var/tmp/5840-mr-"
 	s += strconv.Itoa(os.Getuid())
