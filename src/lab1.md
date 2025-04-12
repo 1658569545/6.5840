@@ -226,3 +226,25 @@ $ bash test-mr.sh
    不要在调用前设置`reply`结构体的任何字段。如果你传递了具有非默认字段的`reply`结构体，RPC系统可能会悄悄地返回错误的值。
 
 ## 实验思路：
+应该由空闲的worker向master来申获取任务，
+
+
+### RPC实现思路：
+在RPC文件中，需要给出相关定义，Master和Worker之间通过RPC来进行任务分配等操作。
+因此最少需要四个结构体定义，两个是关于请求，两个关于报告。
+1. 具体来说，Worker会向Master发送RPC请求，来获取要执行的任务，然后Master会为其分配任务，具体参数包括**任务ID**，**nMap**,**nReduce**,**输入文件**，**任务类型（map还是reduce）**。
+2. 然后任务完成之后，Worker应该向Master进行报告，告知Master该任务是否完成，具体包括**任务类型**和**任务ID**。
+3. 使用`channel`来进行任务的分发，初始化的时候，将所有的任务放到对应的`channel`中，然后在woker中，从`channel`中取出任务并进行执行
+
+### Worker实现思路：
+1. 收到RPC请求回复信息之后，需要根据其中任务类型信息来决定向哪个`channel`发送信息，来通知对应的MapTask和ReduceTask。这部分会在woker来进行实现。即首先发送RPC请求，来获取要执行的任务的相关信息，然后根据任务类型来调用相对应的函数。
+2. 因此，我们需要实现woker（根据收到的消息来分辨任务类型）、MapTask、ReduceTask三个函数。
+3. 当然，还需要使用一个函数来调用call，来向Coordinator发送RPC报告，来向Master发送报告。
+
+### Coordinator实现思路：
+主要需要实现的几个函数：
+1. `Done`：是否已经完成了所有任务，可以使用一个阶段类型的枚举类型来进行判断。
+2. `MakeCoordinator`：初始化相关信息
+3. `checkTimeouts`：超时检查
+4. `requestTask`：任务调度，worker通过rpc来调用这个函数，从而获取要执行的任务。
+5. `reportTaskDone`：任务完成报告，由worker调用，同时处理已经完成的任务，更新相关状态信息。
