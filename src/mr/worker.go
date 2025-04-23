@@ -79,7 +79,7 @@ func doMapTask(mapf func(string,string)[] KeyValue,taskID int,file string,nReduc
 		partitions[idx]=append(partitions[idx],kv)
 	}
 	// 生成中间文件
-	// 一个合理的中间文件命名规范是`mr-X-Y`，其中`X`是Map任务编号，`Y`是Reduce任务编号。
+	// 一个合理的中间文件命名规范是`mr-X-Y`，其中`X`是Map任务编号，`Y`是Reduce桶编号。
 
 	// 遍历切片，读取每个nReduce的所有kvs
 	for idx,kvs:= range partitions{

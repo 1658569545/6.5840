@@ -181,7 +181,7 @@ func (c *Coordinator) ReportTask(args *ReportArgs,reply *ReportReply) error {
 				c.phase=ReducePhase
 				for _,rt := range c.redTasks{
 					rt.Status =Idle
-					// 将完成的map任务输入到管道中
+					// 所有的reduce任务加入red管道中
 					c.redChan <- rt
 				}
 			}
