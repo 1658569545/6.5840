@@ -8,10 +8,15 @@ import "6.5840/labrpc"
 import "time"
 import "crypto/rand"
 import "math/big"
+import "sync"
 
 type Clerk struct {
 	servers []*labrpc.ClientEnd
-	// Your data here.
+	// 客户端ID/SeqId用来判断请求是否重复
+	clientId int64
+	seqId   int
+
+	mu sync.Mutex
 }
 
 func nrand() int64 {
@@ -25,13 +30,21 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
 	// Your code here.
+	ck.clientId = nrand()
+	ck.seqId = 0
 	return ck
 }
 
 func (ck *Clerk) Query(num int) Config {
-	args := &QueryArgs{}
 	// Your code here.
-	args.Num = num
+	ck.mu.Lock()
+	defer ck.mu.Unlock()
+	ck.seqId++
+	args := &QueryArgs{
+		ClientId: ck.clientId,
+		SeqId: ck.seqId,
+		Num: num,
+	}
 	for {
 		// try each known server.
 		for _, srv := range ck.servers {
@@ -46,10 +59,15 @@ func (ck *Clerk) Query(num int) Config {
 }
 
 func (ck *Clerk) Join(servers map[int][]string) {
-	args := &JoinArgs{}
 	// Your code here.
-	args.Servers = servers
-
+	ck.mu.Lock()
+	defer ck.mu.Unlock()
+	ck.seqId++	
+	args := &JoinArgs{
+		Servers: servers,
+		ClientId: ck.clientId,
+		SeqId: ck.seqId,
+	}
 	for {
 		// try each known server.
 		for _, srv := range ck.servers {
@@ -64,10 +82,15 @@ func (ck *Clerk) Join(servers map[int][]string) {
 }
 
 func (ck *Clerk) Leave(gids []int) {
-	args := &LeaveArgs{}
 	// Your code here.
-	args.GIDs = gids
-
+	ck.mu.Lock()
+	defer ck.mu.Unlock()
+	ck.seqId++
+	args := &LeaveArgs{
+		GIDs: gids,
+		ClientId: ck.clientId,
+		SeqId: ck.seqId,
+	}
 	for {
 		// try each known server.
 		for _, srv := range ck.servers {
@@ -82,11 +105,16 @@ func (ck *Clerk) Leave(gids []int) {
 }
 
 func (ck *Clerk) Move(shard int, gid int) {
-	args := &MoveArgs{}
 	// Your code here.
-	args.Shard = shard
-	args.GID = gid
-
+	ck.mu.Lock()
+	defer ck.mu.Unlock()
+	ck.seqId++
+	args := &MoveArgs{
+		Shard: shard,
+		GID: gid,
+		ClientId: ck.clientId,
+		SeqId: ck.seqId,
+	}
 	for {
 		// try each known server.
 		for _, srv := range ck.servers {
