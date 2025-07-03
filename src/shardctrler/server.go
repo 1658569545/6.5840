@@ -19,9 +19,7 @@ type ShardCtrler struct {
 	// Your data here.
 	dead    int32 // set by Kill()
 	configs []Config // indexed by config num
-	// 通知通道，用于通知对应的客户端，请求是否已经执行
 	notifyChan map[int]chan Op
-	// 记录每个客户端的最大已经处理的请求序列号，防止重复执行
 	seqMap	map[int64]int
 }
 
@@ -428,7 +426,7 @@ func (sc *ShardCtrler) Move_op(op *Op){
 func (sc *ShardCtrler) Query_op(op *Op){
 	num := len(sc.configs)
 	if op.Num == -1  || op.Num >= num{
-		op.Cig = sc.configs[num-1]
+		op.Cig = sc.configs[len(sc.configs)-1]
 	}
 	op.Cig = sc.configs[op.Num]
 }
