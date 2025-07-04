@@ -336,46 +336,88 @@ func (sc *ShardCtrler) getNotifyChan(index int) chan Op{
 	return sc.notifyChan[index]
 }
 
+
+
 // 执行Join操作
 func (sc *ShardCtrler) Join_op(op *Op) {
     join_Servers := op.Servers
+
     oldConfig := sc.configs[len(sc.configs)-1]
-    newConfig := Config{
-        Num:    oldConfig.Num + 1,
-        Shards: oldConfig.Shards,
-        Groups: make(map[int][]string),
-    }
+	newConfig := Config{
+		Num:    oldConfig.Num + 1,
+		Shards: oldConfig.Shards,
+		Groups: make(map[int][]string),
+	}
+
     // 复制旧的 Groups
     for gid, servers := range oldConfig.Groups {
-        copyServers := make([]string, len(servers))
-        copy(copyServers, servers)
-        newConfig.Groups[gid] = copyServers
+        newConfig.Groups[gid] = servers
     }
-
     // 添加新的 Groups
     for gid, servers := range join_Servers {
         newConfig.Groups[gid] = servers
     }
 
-    // 将新配置追加到配置列表
-    sc.configs = append(sc.configs, newConfig)
+    // 负载均衡
+	// 计算目标分片数
+	totalShards := len(oldConfig.Shards)
+	totalGroups := len(newConfig.Groups)
+	shardsPerGroup := totalShards / totalGroups
+	extraShards := totalShards % totalGroups
 
-    // 重新分配分片
-    sc.rebalance()
+	// 获取复制组ID并按顺序排序
+	groupIDs := make([]int, 0, len(newConfig.Groups))
+	for gid := range newConfig.Groups {
+		groupIDs = append(groupIDs, gid)
+	}
+
+	sort.Ints(groupIDs)
+
+	// 使用map存储每个group需要的分片数量，方便计算
+	shardCounts := make(map[int]int)
+	// 为shardCounts赋值
+	for _, gid := range groupIDs {
+		shardCounts[gid] = shardsPerGroup
+		if extraShards > 0 {
+			shardCounts[gid]++
+			extraShards--
+		}
+	}
+	// 重新分配分片
+	// 大致思路：遍历Shards数组，获取gid，然后shardsCounts[gid]--，
+	// 代表这个gid已经分配了一个分片，当shardCounts[gid]==0，说明该gid已经获取了目标分片数，不再需要获取分片
+	for shard,gid := range newConfig.Shards{
+		// 为gid分配分片，shardCounts[gid]是该gid还需要的分片数
+		if shardCounts[gid]<=0{
+			// 遍历groupID，看哪个gid还能分配分片
+			for _,newGid := range groupIDs{
+				count:=shardCounts[newGid]
+				if count>0{
+					newConfig.Shards[shard] = newGid
+					shardCounts[newGid]--
+					break
+				}
+			}
+		}else{
+			shardCounts[gid]--
+		}
+	}
+	sc.configs = append(sc.configs, newConfig)
 }
 
-// 执行Leave操作
+// 执行Leave操作，op.GIDS[] int是要删除的group的编号
 func (sc *ShardCtrler) Leave_op(op *Op){
-	// op.GIDS[] int是要删除的group的编号
 	// 获取旧的配置，然后复制的时候，跳过该group，对于该组的分片，直接将该组的分片则置为别的
-	removedGids := op.GIDs
 	oldConfig := sc.configs[len(sc.configs)-1]
+
+	removedGids := op.GIDs
 	// 转化成Map，用来快速查找
 	removedGidMap := make(map[int]bool)
 	// 将要删除的gid设置为true
 	for _, gid := range removedGids{
 		removedGidMap[gid] = true
 	}
+
 	// 创建新配置，直接跳过gid = true的
 	newConfig := Config{
 		Num:oldConfig.Num+1,
@@ -385,13 +427,61 @@ func (sc *ShardCtrler) Leave_op(op *Op){
 	// 复制Group
 	for gid,servers := range oldConfig.Groups{
 		if !removedGidMap[gid]{
-			copyServers:= make([]string,len(servers))
-			copy(copyServers,servers)
-			newConfig.Groups[gid]=copyServers
+			newConfig.Groups[gid] = servers
 		}
 	}
+	if len(newConfig.Groups) == 0 {
+		for shard, _ := range newConfig.Shards {
+			newConfig.Shards[shard] = 0
+		}
+		// 将新配置添加到配置列表
+		sc.configs = append(sc.configs, newConfig)
+		return
+	}
+	// 计算目标分片数
+	totalShards := len(oldConfig.Shards)
+	totalGroups := len(newConfig.Groups)
+	if totalGroups == 0 {
+		// 不能有零个复制组
+		return
+	}
+	shardsPerGroup := totalShards / totalGroups
+	extraShards := totalShards % totalGroups
+
+	// 获取复制组ID并按顺序排序
+	groupIDs := make([]int, 0, len(newConfig.Groups))
+	for gid := range newConfig.Groups {
+		groupIDs = append(groupIDs, gid)
+	}
+	sort.Ints(groupIDs)
+
+	// 计算每个复制组需要的分片数量
+	shardCounts := make(map[int]int)
+	// 按顺序为每个GID分配分片
+	for _, gid := range groupIDs {
+		shardCounts[gid] = shardsPerGroup
+		if extraShards > 0 {
+			shardCounts[gid]++
+			extraShards--
+		}
+	}
+
+	for shard, gid := range newConfig.Shards {
+		if removedGidMap[gid] || shardCounts[gid] <= 0 {
+			for _, newGid := range groupIDs {
+				count := shardCounts[newGid]
+				if count > 0 {
+					newConfig.Shards[shard] = newGid
+					shardCounts[newGid]--
+					break
+				}
+			}
+		} else {
+			shardCounts[gid]--
+		}
+	}
+	// 将新配置添加到配置列表
 	sc.configs = append(sc.configs, newConfig)
-	sc.rebalance()
 }
 // 执行Move操作
 func (sc *ShardCtrler) Move_op(op *Op){
@@ -402,6 +492,7 @@ func (sc *ShardCtrler) Move_op(op *Op){
 	if aimgid == oldConfig.Shards[aimshard]{
 		return
 	}
+
 	// 创建新配置
 	newConfig := Config{
 		Num:oldConfig.Num+1,
@@ -414,6 +505,7 @@ func (sc *ShardCtrler) Move_op(op *Op){
 		copy(copyServers,servers)
 		newConfig.Groups[gid]=copyServers
 	}
+
 	//迁移，先判断gid是否存在，再迁移
 	if _,exist := newConfig.Groups[aimgid];!exist{
 		return
@@ -427,79 +519,9 @@ func (sc *ShardCtrler) Query_op(op *Op){
 	num := len(sc.configs)
 	if op.Num == -1  || op.Num >= num{
 		op.Cig = sc.configs[len(sc.configs)-1]
+		return 
 	}
 	op.Cig = sc.configs[op.Num]
-}
-
-//Join和Leave之后需要进行负载均衡
-func (sc *ShardCtrler) rebalance() {
-    // 获取最新的配置
-    lastConfig := sc.configs[len(sc.configs)-1]
-    tempShard := lastConfig.Shards
-    groups := lastConfig.Groups
-
-    totalShards := len(tempShard)
-    totalGroups := len(groups)
-    if totalGroups == 0 {
-        // 没有 group，全部置为 0
-        for i := range tempShard {
-            tempShard[i] = 0
-        }
-        return
-    }
-
-    // 1. 统计每个 group 当前拥有的 shard 数
-    gid2shards := make(map[int][]int) // gid -> shard indices
-    for i, gid := range tempShard {
-        if gid != 0 {
-            gid2shards[gid] = append(gid2shards[gid], i)
-        }
-    }
-
-    // 2. 计算目标分配
-    everyNum := totalShards / totalGroups
-    extraNum := totalShards % totalGroups
-
-    // 3. 按照 gid 排序，保证分配顺序一致
-    gids := make([]int, 0, len(groups))
-    for gid := range groups {
-        gids = append(gids, gid)
-    }
-    sort.Ints(gids)
-
-    // 4. 生成目标分配表
-    target := make(map[int]int) // gid -> 目标分片数
-    for i, gid := range gids {
-        if i < extraNum {
-            target[gid] = everyNum + 1
-        } else {
-            target[gid] = everyNum
-        }
-    }
-
-    // 5. 收集多余的 shard
-    var toMove []int // 需要重新分配的 shard 索引
-    for gid, shards := range gid2shards {
-        if len(shards) > target[gid] {
-            toMove = append(toMove, shards[target[gid]:]...)
-            gid2shards[gid] = shards[:target[gid]]
-        }
-    }
-
-    // 6. 分配不足的 group
-    idx := 0
-    for _, gid := range gids {
-        need := target[gid] - len(gid2shards[gid])
-        for i := 0; i < need; i++ {
-            shard := toMove[idx]
-            tempShard[shard] = gid
-            gid2shards[gid] = append(gid2shards[gid], shard)
-            idx++
-        }
-    }
-
-    // 7. 更新配置
-    sc.configs[len(sc.configs)-1].Shards = tempShard
 }
 
 // ================== 后台协程 ==================
