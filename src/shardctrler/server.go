@@ -442,6 +442,20 @@ func (sc *ShardCtrler) Query_op(op *Op){
 }
 
 func (sc *ShardCtrler) rebalanceShards(groups map[int][]string, shards [NShards]int) [NShards]int {
+	/*
+	总体思路：
+		1. 先把group按照id从小到大排序，因为要求将多余的shard分配给id小的group。
+		2. 使用一个map来记录当前各个group已经分配了多少shard。即counts(gid---->shard数目)
+		3. 计算每个group处理shard的平均值，即shards/groups
+		4. 计算多余的shard，即shards%groups
+		5. 使用一个map来存储应该各个group应该分配的shard数目，即quote(gid---->目标shard数目)
+		6. 开始移动shard
+			6.1 遍历shards,
+			6.2 如果shards的gid=0,则需要分配  or  quote[gid]==0,则代表该shards的当前group已经满了，需要分配，加入toMove切片
+			6.3 如果不需要移动，则quote[gid]--，
+		7. 开始分配
+			7.1 将需要分配的切片，分配给还有剩余的group，即quote[gid]>0的group
+	*/ 
 	if len(groups) == 0 {
 		return [NShards]int{}
 	}
