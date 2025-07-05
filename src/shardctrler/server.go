@@ -336,8 +336,6 @@ func (sc *ShardCtrler) getNotifyChan(index int) chan Op{
 	return sc.notifyChan[index]
 }
 
-
-
 // 执行Join操作
 func (sc *ShardCtrler) Join_op(op *Op) {
     join_Servers := op.Servers
@@ -358,50 +356,8 @@ func (sc *ShardCtrler) Join_op(op *Op) {
         newConfig.Groups[gid] = servers
     }
 
-    // 负载均衡
-	// 计算目标分片数
-	totalShards := len(oldConfig.Shards)
-	totalGroups := len(newConfig.Groups)
-	shardsPerGroup := totalShards / totalGroups
-	extraShards := totalShards % totalGroups
-
-	// 获取复制组ID并按顺序排序
-	groupIDs := make([]int, 0, len(newConfig.Groups))
-	for gid := range newConfig.Groups {
-		groupIDs = append(groupIDs, gid)
-	}
-
-	sort.Ints(groupIDs)
-
-	// 使用map存储每个group需要的分片数量，方便计算
-	shardCounts := make(map[int]int)
-	// 为shardCounts赋值
-	for _, gid := range groupIDs {
-		shardCounts[gid] = shardsPerGroup
-		if extraShards > 0 {
-			shardCounts[gid]++
-			extraShards--
-		}
-	}
-	// 重新分配分片
-	// 大致思路：遍历Shards数组，获取gid，然后shardsCounts[gid]--，
-	// 代表这个gid已经分配了一个分片，当shardCounts[gid]==0，说明该gid已经获取了目标分片数，不再需要获取分片
-	for shard,gid := range newConfig.Shards{
-		// 为gid分配分片，shardCounts[gid]是该gid还需要的分片数
-		if shardCounts[gid]<=0{
-			// 遍历groupID，看哪个gid还能分配分片
-			for _,newGid := range groupIDs{
-				count:=shardCounts[newGid]
-				if count>0{
-					newConfig.Shards[shard] = newGid
-					shardCounts[newGid]--
-					break
-				}
-			}
-		}else{
-			shardCounts[gid]--
-		}
-	}
+	// 负载均衡
+	newConfig.Shards=sc.rebalanceShards(newConfig.Groups,newConfig.Shards)
 	sc.configs = append(sc.configs, newConfig)
 }
 
@@ -438,51 +394,12 @@ func (sc *ShardCtrler) Leave_op(op *Op){
 		sc.configs = append(sc.configs, newConfig)
 		return
 	}
-	// 计算目标分片数
-	totalShards := len(oldConfig.Shards)
-	totalGroups := len(newConfig.Groups)
-	if totalGroups == 0 {
-		// 不能有零个复制组
-		return
-	}
-	shardsPerGroup := totalShards / totalGroups
-	extraShards := totalShards % totalGroups
-
-	// 获取复制组ID并按顺序排序
-	groupIDs := make([]int, 0, len(newConfig.Groups))
-	for gid := range newConfig.Groups {
-		groupIDs = append(groupIDs, gid)
-	}
-	sort.Ints(groupIDs)
-
-	// 计算每个复制组需要的分片数量
-	shardCounts := make(map[int]int)
-	// 按顺序为每个GID分配分片
-	for _, gid := range groupIDs {
-		shardCounts[gid] = shardsPerGroup
-		if extraShards > 0 {
-			shardCounts[gid]++
-			extraShards--
-		}
-	}
-
-	for shard, gid := range newConfig.Shards {
-		if removedGidMap[gid] || shardCounts[gid] <= 0 {
-			for _, newGid := range groupIDs {
-				count := shardCounts[newGid]
-				if count > 0 {
-					newConfig.Shards[shard] = newGid
-					shardCounts[newGid]--
-					break
-				}
-			}
-		} else {
-			shardCounts[gid]--
-		}
-	}
+	// 负载均衡
+	newConfig.Shards=sc.rebalanceShards(newConfig.Groups,newConfig.Shards)
 	// 将新配置添加到配置列表
 	sc.configs = append(sc.configs, newConfig)
 }
+
 // 执行Move操作
 func (sc *ShardCtrler) Move_op(op *Op){
 	aimshard := op.Shard
@@ -523,6 +440,67 @@ func (sc *ShardCtrler) Query_op(op *Op){
 	}
 	op.Cig = sc.configs[op.Num]
 }
+
+func (sc *ShardCtrler) rebalanceShards(groups map[int][]string, shards [NShards]int) [NShards]int {
+	if len(groups) == 0 {
+		return [NShards]int{}
+	}
+
+	groupIDs := make([]int, 0, len(groups))
+	for gid := range groups {
+		groupIDs = append(groupIDs, gid)
+	}
+	// 分配分片时，多余的分片必须优先分配给 GID 最小的 group
+	sort.Ints(groupIDs)
+
+	// 统计每个 group 拥有的 shard
+	counts := make(map[int]int)
+	for _, gid := range shards {
+		if gid != 0 {
+			counts[gid]++
+		}
+	}
+
+	// 计算目标数量
+	target := NShards / len(groups)
+	extra := NShards % len(groups)
+
+	// 每个group还要分配的目标分片数量
+	quota := make(map[int]int)
+	for _, gid := range groupIDs {
+		quota[gid] = target
+		if extra > 0 {
+			quota[gid]++
+			extra--
+		}
+	}
+
+	// 遍历shards(shard-->gid)，寻找需要移动的分片
+	toMove := []int{}
+	for shard, gid := range shards {
+		// 如果shards[shard]=0,则代表这个分片还没被分配
+		// 如果quota[gid]=0，则代表这个分片当前所在的group已经满了，因此需要分配
+		if gid == 0 || quota[gid] == 0 { 
+			toMove = append(toMove, shard)
+		} else {
+			quota[gid]-- // 这个 shard 保留
+		}
+	}
+
+	// 把需要移动的 shard 分配给 quota 还有剩余的 group
+	for _, shard := range toMove {
+		for _, gid := range groupIDs {
+			if quota[gid] > 0 {
+				shards[shard] = gid
+				quota[gid]--
+				break
+			}
+		}
+	}
+
+	return shards
+}
+
 
 // ================== 后台协程 ==================
 // 读取ApplyCh中的数据，然后解析，执行
