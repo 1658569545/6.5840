@@ -17,6 +17,7 @@ import "time"
 // which shard is a key in?
 // please use this function,
 // and please do not change it.
+// 确定当前数据所在的分片
 func key2shard(key string) int {
 	shard := 0
 	if len(key) > 0 {
@@ -38,20 +39,22 @@ type Clerk struct {
 	config   shardctrler.Config
 	make_end func(string) *labrpc.ClientEnd
 	// You will have to modify this struct.
+	clientId int64
+	seqId int
 }
 
-// the tester calls MakeClerk.
-//
-// ctrlers[] is needed to call shardctrler.MakeClerk().
-//
-// make_end(servername) turns a server name from a
-// Config.Groups[gid][i] into a labrpc.ClientEnd on which you can
-// send RPCs.
+// MakeClerk() 用于创建一个分片控制器
+// make_end(servername) 用来将服务器名转为可以进行远程过程调用（RPC）操作的客户端端点（ClientEnd）。
 func MakeClerk(ctrlers []*labrpc.ClientEnd, make_end func(string) *labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
+	// 初始化一个分片控制器
 	ck.sm = shardctrler.MakeClerk(ctrlers)
 	ck.make_end = make_end
 	// You'll have to add code here.
+	ck.clientId = nrand()
+	ck.seqId = 0
+	// 初始化配置信息
+	ck.config = ck.sm.Query(-1)
 	return ck
 }
 
@@ -60,14 +63,19 @@ func MakeClerk(ctrlers []*labrpc.ClientEnd, make_end func(string) *labrpc.Client
 // keeps trying forever in the face of all other errors.
 // You will have to modify this function.
 func (ck *Clerk) Get(key string) string {
-	args := GetArgs{}
-	args.Key = key
-
+	ck.seqId++
 	for {
+		args:= GerArgs{
+			Key:key,
+			ClientId:ck.clientId,
+			SeqId:ck.seqId,
+		}
+		// 计算当前key所在的shard，
 		shard := key2shard(key)
+		// 获取当前shard所在的group	
 		gid := ck.config.Shards[shard]
 		if servers, ok := ck.config.Groups[gid]; ok {
-			// try each server for the shard.
+			// try each server for the shard. To find leader
 			for si := 0; si < len(servers); si++ {
 				srv := ck.make_end(servers[si])
 				var reply GetReply
@@ -82,7 +90,7 @@ func (ck *Clerk) Get(key string) string {
 			}
 		}
 		time.Sleep(100 * time.Millisecond)
-		// ask controller for the latest configuration.
+		// 如果每个服务器都Get失败，则沉睡一段时间后获取最新的配置
 		ck.config = ck.sm.Query(-1)
 	}
 
@@ -92,16 +100,19 @@ func (ck *Clerk) Get(key string) string {
 // shared by Put and Append.
 // You will have to modify this function.
 func (ck *Clerk) PutAppend(key string, value string, op string) {
-	args := PutAppendArgs{}
-	args.Key = key
-	args.Value = value
-	args.Op = op
-
-
+	ck.seqId++
 	for {
+		args:= PutAppendArgs{
+			Key:key,
+			Value:value,
+			Op:op,
+			ClientId:ck.clientId,
+			SeqId:ck.seqId,
+		}
 		shard := key2shard(key)
 		gid := ck.config.Shards[shard]
 		if servers, ok := ck.config.Groups[gid]; ok {
+			// To find leader
 			for si := 0; si < len(servers); si++ {
 				srv := ck.make_end(servers[si])
 				var reply PutAppendReply

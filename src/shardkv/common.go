@@ -10,23 +10,35 @@ package shardkv
 //
 
 const (
-	OK             = "OK"
-	ErrNoKey       = "ErrNoKey"
-	ErrWrongGroup  = "ErrWrongGroup"
-	ErrWrongLeader = "ErrWrongLeader"
+	OK            		Err = "OK"
+	ErrNoKey       	  		= "ErrNoKey"
+	ErrWrongGroup  	  		= "ErrWrongGroup"
+	ErrWrongLeader 	  		= "ErrWrongLeader"
+	ShardNotArrived         = "ShardNotArrived"
+	ConfigNotArrived        = "ConfigNotArrived"
+	ErrInconsistentData     = "ErrInconsistentData"
+	ErrOverTime             = "ErrOverTime"
 )
+
+const (
+	PutType 	Operation = "Put"
+	AppendType 	    	  = "Append"
+	GetType 	  	  	  = "Get"
+	UpConfigType 		  = "UpConfig"
+	AddShardType 		  = "AddShard"
+	RemoveShardType 	  = "RemoveShard"
+)
+
+type Operation string
 
 type Err string
 
-// Put or Append
 type PutAppendArgs struct {
-	// You'll have to add definitions here.
 	Key   string
 	Value string
 	Op    string // "Put" or "Append"
-	// You'll have to add definitions here.
-	// Field names must start with capital letters,
-	// otherwise RPC will break.
+	ClientId int64
+	SeqId   int
 }
 
 type PutAppendReply struct {
@@ -35,10 +47,23 @@ type PutAppendReply struct {
 
 type GetArgs struct {
 	Key string
-	// You'll have to add definitions here.
+	ClientId int64
+	SeqId   int
 }
 
 type GetReply struct {
 	Err   Err
 	Value string
+}
+
+type SendShardArg struct {
+	LastAppliedRequestId map[int64]int // 接收方用来更新其客户端请求序号映射
+	ShardId              int
+	Shard                Shard // Shard to be sent
+	ClientId             int64
+	RequestId            int64// 请求序号（通常是配置版本号）
+}
+
+type AddShardReply struct {
+	Err Err
 }
