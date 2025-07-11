@@ -60,8 +60,8 @@ type ShardKV struct {
 	notifyChan map[int]chan Op
 	SeqMap map[int64]int
 
-	Config shardctrler.Config // 需要更新的最新的配置
-	LastConfig shardctrler.Config // 更新之前使用的配置，用来对比是否全部更新完了
+	Config shardctrler.Config // 最新配置
+	LastConfig shardctrler.Config // 倒数第二个配置
 
 	shardPersist []Shard 	// 存储Shard数据
 
@@ -142,6 +142,79 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	return kv
 }
 
+//====================== 后台协程 ======================
+
+// 处理ApplyCh中的ApplyMsg
+func(kv *ShardKV) applyMsgHandlerLoop(){
+	for{
+		if kv.killed(){
+			return 
+		}
+		select{
+		case:msg <- kv.applyCh:
+			if msg.CommandValid{
+				kv.mu.Lock()
+				op := msga.CommandValid.(Op)
+				reply := OpReply{
+					ClientId: op.ClientId,
+					SeqId:    op.SeqId,
+					Err:      OK,
+				}
+				// 处理Put、Append、Get 
+				if op.OpType == PutType || op.OpType == AppendType || op.OpType == GetType{
+					shardId := key2shard(op.Key)
+					if kv.Config.Shards[shardId] != kv.gid{
+						reply.Err = ErrWrongGroup
+					}else if kv.shardPersist[shardId].KVMap== nil{
+						reply.Err = ShardNotArrived
+					}else{
+						if !kv.isRepeat(op.ClientId,op.SeqId){
+							kv.SeqMap[op.ClientId] = op.SeqId
+							switch op.OpType {
+							case PutType:
+								kv.shardPersist[shardId].KVMap[op.Key] = op.Value
+							case AppendType:
+								kv.shardPersist[shardId].KVMap[op.Key] += op.Value
+							case GetType:
+								
+							}
+						}
+					}
+				}else{
+					// 处理其他RPC
+					switch op.OpType {
+					case UpConfigType:
+						// 配置更新
+						kv.upConfigHandler(op)
+					case AddShardType:
+						// 对于分片发送，我们使用op.SeqId来存储请求序号，其数值一般为配置版本号
+						if kv.Config.Num < op.SeqId {
+							reply.Err = ConfigNotArrived
+							break
+						}
+						kv.addShardHandler(op)
+					case RemoveShardType:
+						kv.removeShardHandler(op)
+					}
+				}
+				// 进行快照压缩
+				if kv.maxraftstate!=-1 && kv.persister.RaftStateSize() > kv.maxraftstate{
+					snapshot := kv.PersistSnapShot()
+					kv.rf.Snapshot(msg.CommandIndex, snapshot)
+				}
+				// 将结果压到通道里面
+				kv.getWaitCh(msg.CommandIndex) <- reply
+				kv.mu.Unlock()
+			}else if msg.SnapshotValid{
+				kv.mu.Lock()
+				// 读取快照中的数据
+				kv.ReadSnapShot(msg.Snapshot)
+				kv.mu.Unlock()
+			}
+		}
+	}
+}
+
 // ====================== RPC 部分 ======================
 func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
@@ -211,79 +284,17 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	return
 }
 
-
-
-
-//====================== 后台协程 ======================
-
-// 处理ApplyCh中的ApplyMsg
-func(kv *ShardKV) applyMsgHandlerLoop(){
-	for{
-		if kv.killed(){
-			return 
-		}
-		select{
-		case:msg <- kv.applyCh:
-			if msg.CommandValid{
-				kv.mu.Lock()
-				op := msga.CommandValid.(Op)
-				reply := OpReply{
-					ClientId: op.ClientId,
-					SeqId:    op.SeqId,
-					Err:      OK,
-				}
-				// 处理Put、Append、Get 
-				if op.OpType == PutType || op.OpType == AppendType || op.OpType == GetType{
-					shardId := key2shard(op.Key)
-					if kv.Config.Shards[shardId] != kv.gid{
-						reply.Err = ErrWrongGroup
-					}else if kv.shardPersist[shardId].KVMap== nil{
-						reply.Err = ShardNotArrived
-					}else{
-						if !kv.isRepeat(op.ClientId,op.SeqId){
-							kv.SeqMap[op.ClientId] = op.SeqId
-							switch op.OpType {
-							case PutType:
-								kv.shardPersist[shardId].KVMap[op.Key] = op.Value
-							case AppendType:
-								kv.shardPersist[shardId].KVMap[op.Key] += op.Value
-							case GetType:
-								
-							}
-						}
-					}
-				}else{
-					// 处理其他RPC
-					switch op.OpType {
-					case UpConfigType:
-						// 配置更新
-						kv.upConfigHandler(op)
-					case AddShardType:
-						if kv.Config.Num < op.SeqId {
-							reply.Err = ConfigNotArrived
-							break
-						}
-						kv.addShardHandler(op)
-					case RemoveShardType:
-						kv.removeShardHandler(op)
-					}
-				}
-				// 进行快照压缩
-				if kv.maxraftstate!=-1 && kv.persister.RaftStateSize() > kv.maxraftstate{
-					snapshot := kv.PersistSnapShot()
-					kv.rf.Snapshot(msg.CommandIndex, snapshot)
-				}
-				// 将结果压到通道里面
-				kv.getWaitCh(msg.CommandIndex) <- reply
-				kv.mu.Unlock()
-			}else if msg.SnapshotValid{
-				kv.mu.Lock()
-				// 读取快照中的数据
-				kv.ReadSnapShot(msg.Snapshot)
-				kv.mu.Unlock()
-			}
-		}
+// 各个group之间的RPC，用来传输分片
+func (kv *ShardKV) AddShard(args* SendShardArg,reply *AddShardReply){
+	command := Op{
+		OpType:   AddShardType,
+		ClientId: args.ClientId,
+		SeqId:    args.RequestId,	// 请求序号（通常是配置版本号）
+		ShardId:  args.ShardId,		
+		Shard:    args.Shard,		// 分片数据
+		SeqMap:   args.LastAppliedRequestId,
 	}
+	reply.Err = kv.startCommand(command, AddShardsTimeout)
 }
 
 //================= 持久化快照部分 =================
@@ -329,6 +340,27 @@ func (kv *ShardKV) ReadSnapShot(snapshot []byte) {
 }
 
 // ================= lib Functions =================
+
+// 更新配置
+func (kv *ShardKV) upConfigHandler(op Op){
+	curConfig := kv.Config
+	upConfig := op.UpConfig
+	// 我的配置较新，因此不需要更新
+	if curConfig.Num >= upConfig.Num{
+		return 
+	}
+	// 更新
+	for shard,gid := range curConfig.Shards{
+		
+		if gid == kv.gid && curConfig.Shards[shard] == 0 {
+			kv.shardPersist[shard] = upConfig.Shards[shard]
+			kv.shardPersist[shard].ConfigNum = upConfig.Num
+		}
+	}
+	kv.LastConfig = curConfig
+	kv.Config = upConfig
+}
+
 // 写入Raft
 func (kv *ShardKV) startCommand(command Op,timeoutPeriod time.Duration) Err {
 	kv.mu.Lock()
