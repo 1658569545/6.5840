@@ -3,16 +3,16 @@ package kvraft
 import "6.5840/labrpc"
 import "crypto/rand"
 import "math/big"
-import "time"
 
 
 type Clerk struct {
 	servers []*labrpc.ClientEnd
 	// You will have to modify this struct.
-	leaderId int64
-	// 客户端ID+客户请求序列号
+	// 确定哪个服务器是leader
+	leaderId int
+	// 防止重复
+	seqId int
 	clientId int64
-	seqNum int64
 }
 
 func nrand() int64 {
@@ -26,26 +26,9 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
 	// You'll have to add code here.
-	ck.leaderId = 0
 	ck.clientId = nrand()
-	ck.seqNum = 1
+	ck.leaderId = int(nrand())%len(servers)
 	return ck
-}
-
-// ========= 找到一个可以用的leaderId =========
-func (ck *Clerk) GetState() int {
-	for {
-		args := IsLeaderArgs{}
-		reply := IsLeaderReply{}
-		ok := ck.servers[ck.leaderId].Call("KVServer.IsLeader", &args, &reply)
-		if ok && reply.IsLeader{
-			return int(ck.leaderId)
-		}else{
-			// 判断下一个
-			time.Sleep(10*time.Millisecond )
-			ck.leaderId = (ck.leaderId + 1) % int64(len(ck.servers))
-		}
-	}
 }
 
 // fetch the current value for a key.
@@ -59,27 +42,35 @@ func (ck *Clerk) GetState() int {
 // must match the declared types of the RPC handler function's
 // arguments. and reply must be passed as a pointer.
 func (ck *Clerk) Get(key string) string {
+
 	// You will have to modify this function.
+	ck.seqId++
 	args:=GetArgs{
-		Key:key, 
-		ClientId:ck.clientId, 
-		SeqNum:ck.seqNum,
+		Key:key,
+		ClientId:ck.clientId,
+		SeqId:ck.seqId,
 	}
-	reply:=GetReply{}
-	// 找到一个可以用的leaderId
-	ck.GetState()
-	ok := ck.servers[ck.leaderId].Call("KVServer.Get", &args, &reply)
-	for !ok || reply.Err!= OK{
-		// 这个不行，继续下一个
-		ck.leaderId = (ck.leaderId + 1) % int64(len(ck.servers))
-		ck.GetState()
-		ok = ck.servers[ck.leaderId].Call("KVServer.Get", &args, &reply)
+	lastLeaderId := ck.leaderId
+	// 发送RPC
+	for {
+		reply := GetReply{}
+		ok := ck.servers[lastLeaderId].Call("KVServer.Get", &args, &reply)
+		if ok{
+			if reply.Err ==ErrNoKey{
+				ck.leaderId = lastLeaderId
+				return ""
+			}else if reply.Err == OK{
+				ck.leaderId = lastLeaderId
+				return reply.Value
+			}else if reply.Err == ErrWrongLeader{
+				// 换个服务器继续连接
+				lastLeaderId =(lastLeaderId+1)%len(ck.servers)
+				continue
+			}
+		}
+		// 可能这个leader节点会崩
+		lastLeaderId =(lastLeaderId+1)%len(ck.servers)
 	}
-	if ok{
-		// 成功了
-		ck.seqNum++
-	}
-	return reply.Value
 }
 
 // shared by Put and Append.
@@ -92,26 +83,33 @@ func (ck *Clerk) Get(key string) string {
 // arguments. and reply must be passed as a pointer.
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	// You will have to modify this function.
+	ck.seqId++
 	args:=PutAppendArgs{
-		Key: key,
-		Value: value,
-		Op: op,
-		ClientId: ck.clientId,
-		SeqNum: ck.seqNum,
+		Key:key,
+		Value:value,
+		Op:op,
+		ClientId:ck.clientId,
+		SeqId:ck.seqId,	
 	}
-	reply:=PutAppendReply{}
-	ck.GetState()
-	ok := ck.servers[ck.leaderId].Call("KVServer.PutAppend", &args, &reply)
-	for !ok || reply.Err!= OK{
-		ck.leaderId = (ck.leaderId + 1) % int64(len(ck.servers))
-		ck.GetState()
-		ok = ck.servers[ck.leaderId].Call("KVServer.PutAppend", &args, &reply)
-	}
-	if ok{
-		ck.seqNum++
+	lastLeaderId := ck.leaderId
+	// 发送RPC
+	for {
+		reply := PutAppendReply{}
+		ok := ck.servers[lastLeaderId].Call("KVServer.PutAppend", &args, &reply)
+		if ok{
+			if reply.Err == OK{
+				ck.leaderId = lastLeaderId
+				return 
+			}else if reply.Err == ErrWrongLeader{
+				// 换个服务器继续连接
+				lastLeaderId =(lastLeaderId+1)%len(ck.servers)
+				continue
+			}
+		}
+		// 可能这个leader节点会崩
+		lastLeaderId =(lastLeaderId+1)%len(ck.servers)
 	}
 }
-
 
 func (ck *Clerk) Put(key string, value string) {
 	ck.PutAppend(key, value, "Put")

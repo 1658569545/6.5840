@@ -43,12 +43,15 @@ import (
 // snapshots) on the applyCh, but set CommandValid to false for these
 // other uses.
 type ApplyMsg struct {
+	// 普通命令标志
 	CommandValid bool
 	Command      interface{}
 	CommandIndex int
 
 	// For 3D:
+	// 快照消息标志
 	SnapshotValid bool
+	// 快照数据
 	Snapshot      []byte
 	SnapshotTerm  int
 	SnapshotIndex int
@@ -99,7 +102,7 @@ type Raft struct {
 	// Volatile state on all servers
 	// 提交
 	commitIndex int
-	// 应用到状态机
+	// 应用到状态机最后一条日志的索引
 	lastApplied int
 
 	// Volatile state on leaders
@@ -821,7 +824,7 @@ func (rf *Raft) ticker() {
 		rf.mu.Lock()
 		if rf.state == follower {
 			// follower超时选举
-			if time.Now().Sub(rf.lastHeartbeat) > time.Duration(200 + (rand.Int63() % 300)) * time.Millisecond {
+			if time.Now().Sub(rf.lastHeartbeat) > time.Duration(200 + (rand.Int63() % 30)) * time.Millisecond {
 				rf.stateChange(candidate)
 				rf.resetTimer()
 				rf.broadcastRequestVote()
@@ -830,22 +833,20 @@ func (rf *Raft) ticker() {
 			rf.broadcastHeartBeat()
 		} else {
 			// candidate超时选举
-			if time.Now().Sub(rf.lastHeartbeat) > time.Duration(500 + (rand.Int63() % 300)) * time.Millisecond {
+			if time.Now().Sub(rf.lastHeartbeat) > time.Duration(500 + (rand.Int63() % 30)) * time.Millisecond {
 				rf.resetTimer()
 				rf.broadcastRequestVote()
 			}
 		}
 		rf.mu.Unlock()
-
-		// pause for a random amount of time between 50 and 350
-		// milliseconds.
+		
 		ms := 50 + rand.Int63() % 50
 		time.Sleep(time.Duration(ms) * time.Millisecond)
 	}
 }
 
 /*
-执行日志
+	将日志提交到ApplyCh中，然后上层服务器读取管道中的日志，解析命令，执行相关操作。
 */
 func (rf *Raft) applyLog() {
 	for rf.killed() == false {
@@ -891,7 +892,6 @@ func (rf *Raft) monitorLogSize(threshold int) {
 	for rf.killed() == false {
 		rf.mu.Lock()
 		if len(rf.log) > threshold {
-			DPrintf("Server %v %p (Term: %v) log size: %v, threshold: %v", rf.me, rf, rf.currentTerm, len(rf.log), threshold)
 			rf.SnapshotWithoutLock(rf.lastApplied, rf.persister.ReadSnapshot())
 		}
 		rf.mu.Unlock()
