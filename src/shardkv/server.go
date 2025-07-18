@@ -109,9 +109,9 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 		return
 	}
 	// 重复请求
-	if args.SequenceNum <= kv.clientSequences[args.ClientId]{
-		reply.Err = OK
+	if args.SequenceNum <= kv.clientSequences[args.ClientId] {
 		reply.Value = kv.kv[args.Key]
+		reply.Err = OK
 		kv.mu.Unlock()
 		return
 	}

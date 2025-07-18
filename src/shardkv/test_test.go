@@ -21,6 +21,7 @@ func check(t *testing.T, ck *Clerk, key string, value string) {
 }
 
 // test static 2-way sharding, without shard movement.
+
 func TestStaticShards5A(t *testing.T) {
 	fmt.Printf("Test (5A): static shards ...\n")
 
