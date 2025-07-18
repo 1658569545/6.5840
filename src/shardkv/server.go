@@ -64,32 +64,31 @@ type ShardKV struct {
 
 
 //---------------------------------------------------- RPC 处理 ----------------------------------------------------
-func (kv *ShardKV) waitCmd(index int64, cmd Op) OpReply {
-	ch := make(chan OpReply, 1)
+func (kv *ShardKV) waitCmd(index int64,cmd Op) OpReply{
+	ch := make(chan OpReply,1)
 	kv.mu.Lock()
 	kv.waitChannels[index] = ch
 	kv.mu.Unlock()
-	
-	select {
+	select{
 	case res := <-ch:
+		// 判断是否合法
 		if res.CmdType != cmd.CmdType || res.ClientId != cmd.ClientId || res.SequenceNum != cmd.SequenceNum {
 			res.Err = ErrCmd
 		}
 		kv.mu.Lock()
-		delete(kv.waitChannels, index)
+		delete(kv.waitChannels,index)
 		kv.mu.Unlock()
 		return res
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(100 * time.Millisecond):
 		kv.mu.Lock()
-		delete(kv.waitChannels, index)
+		delete(kv.waitChannels,index)
 		kv.mu.Unlock()
-		res := OpReply{
+		res:=OpReply{
 			Err: ErrTimeout,
 		}
 		return res
 	}
 }
-
 
 func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 	kv.mu.Lock()
@@ -353,31 +352,7 @@ func (kv *ShardKV) isLeader() bool {
 }
 
 // 等待raft日志的应用结果
-func (kv *ShardKV) watiCmd(index int64,cmd Op) OpReply{
-	ch := make(chan OpReply,1)
-	kv.mu.Lock()
-	kv.waitChannels[index] = ch
-	kv.mu.Unlock()
-	select{
-	case res := <-ch:
-		// 判断是否合法
-		if res.CmdType != cmd.CmdType || res.ClientId != cmd.ClientId || res.SequenceNum != cmd.SequenceNum {
-			res.Err = ErrCmd
-		}
-		kv.mu.Lock()
-		delete(kv.waitChannels,index)
-		kv.mu.Unlock()
-		return res
-	case <-time.After(100 * time.Millisecond):
-		kv.mu.Lock()
-		delete(kv.waitChannels,index)
-		kv.mu.Unlock()
-		res:=OpReply{
-			Err: ErrTimeout,
-		}
-		return res
-	}
-}
+
 
 // 检查分片状态
 // return (valid, ready)，分片是否属于本组、分片是否处于正常状态
@@ -405,8 +380,8 @@ func (kv *ShardKV) isRepeated(clientId,sequenceNum int64) bool{
 func (kv *ShardKV) getSnapShot() []byte {
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
-	e.Encode(kv.clientSequences)
 	e.Encode(kv.kv)
+	e.Encode(kv.clientSequences)
 	e.Encode(kv.shardStates)
 	e.Encode(kv.lastConfig)
 	e.Encode(kv.curConfig)
@@ -421,8 +396,8 @@ func (kv *ShardKV) readSnapShot(data []byte){
 	d.Decode(&kv.kv)
 	d.Decode(&kv.clientSequences)
 	d.Decode(&kv.shardStates)
-	d.Decode(&kv.curConfig)
 	d.Decode(&kv.lastConfig)
+	d.Decode(&kv.curConfig)
 	return
 }
 
