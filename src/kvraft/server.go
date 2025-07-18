@@ -290,6 +290,8 @@ func (kv* KVServer) applyMsgLoop() {
 	}
 }
 
+// unreliable net, restarts, partitions, snapshots, random keys, many clients
+
 // 将快照中的数据持久化
 func (kv *KVServer) PersistSnapShot() []byte {
 	kv.mu.Lock()

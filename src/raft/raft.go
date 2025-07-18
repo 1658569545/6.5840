@@ -824,7 +824,7 @@ func (rf *Raft) ticker() {
 		rf.mu.Lock()
 		if rf.state == follower {
 			// follower超时选举
-			if time.Now().Sub(rf.lastHeartbeat) > time.Duration(200 + (rand.Int63() % 30)) * time.Millisecond {
+			if time.Now().Sub(rf.lastHeartbeat) > time.Duration(200 + (rand.Int63() % 300)) * time.Millisecond {
 				rf.stateChange(candidate)
 				rf.resetTimer()
 				rf.broadcastRequestVote()
@@ -833,7 +833,7 @@ func (rf *Raft) ticker() {
 			rf.broadcastHeartBeat()
 		} else {
 			// candidate超时选举
-			if time.Now().Sub(rf.lastHeartbeat) > time.Duration(500 + (rand.Int63() % 30)) * time.Millisecond {
+			if time.Now().Sub(rf.lastHeartbeat) > time.Duration(500 + (rand.Int63() % 300)) * time.Millisecond {
 				rf.resetTimer()
 				rf.broadcastRequestVote()
 			}
@@ -884,18 +884,6 @@ func (rf *Raft) applyLog() {
 			rf.lastApplied = max(rf.lastApplied, commitIndex)
 		}
 		rf.mu.Unlock()
-	}
-}
-
-// We cannot use this, other tests not support snapshot mechanism
-func (rf *Raft) monitorLogSize(threshold int) {
-	for rf.killed() == false {
-		rf.mu.Lock()
-		if len(rf.log) > threshold {
-			rf.SnapshotWithoutLock(rf.lastApplied, rf.persister.ReadSnapshot())
-		}
-		rf.mu.Unlock()
-		time.Sleep(100 * time.Millisecond)
 	}
 }
 
@@ -952,7 +940,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	go rf.applyLog()
 
-	// go rf.monitorLogSize(100)
+	
 
 	return rf
 }

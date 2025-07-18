@@ -14,9 +14,7 @@ import "math/big"
 import "6.5840/shardctrler"
 import "time"
 
-// which shard is a key in?
-// please use this function,
-// and please do not change it.
+// 将数据映射到分片中
 func key2shard(key string) int {
 	shard := 0
 	if len(key) > 0 {
@@ -37,86 +35,130 @@ type Clerk struct {
 	sm       *shardctrler.Clerk
 	config   shardctrler.Config
 	make_end func(string) *labrpc.ClientEnd
-	// You will have to modify this struct.
+	
+	// 记录各个group的leaderId
+	leaderIds map[int]int64
+	
+	clientId int64
+	sequenceNum int64
 }
 
 // the tester calls MakeClerk.
 //
 // ctrlers[] is needed to call shardctrler.MakeClerk().
 //
-// make_end(servername) turns a server name from a
-// Config.Groups[gid][i] into a labrpc.ClientEnd on which you can
+// make_end(servername) turns a server name from a Config.Groups[gid][i] into a labrpc.ClientEnd on which you can
 // send RPCs.
 func MakeClerk(ctrlers []*labrpc.ClientEnd, make_end func(string) *labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.sm = shardctrler.MakeClerk(ctrlers)
 	ck.make_end = make_end
 	// You'll have to add code here.
+	ck.leaderIds = make(map[int]int64)
+	ck.clientId = nrand()
+	ck.sequenceNum = 1
 	return ck
 }
 
-// fetch the current value for a key.
-// returns "" if the key does not exist.
-// keeps trying forever in the face of all other errors.
-// You will have to modify this function.
+// 对某个分片进行get
 func (ck *Clerk) Get(key string) string {
-	args := GetArgs{}
-	args.Key = key
-
+	args := GetArgs{
+		Key: key,
+		ClientId: ck.clientId,
+		SequenceNum : ck.sequenceNum,
+	}
 	for {
 		shard := key2shard(key)
 		gid := ck.config.Shards[shard]
 		if servers, ok := ck.config.Groups[gid]; ok {
-			// try each server for the shard.
+			// **********这一段很迷惑
+			if leader,ok := ck.leaderIds[gid]; !ok{
+				leader_srv := ck.make_end(servers[leader])
+				var reply GetReply
+				ok := leader_srv.Call("ShardKV.Get", &args, &reply)
+				if ok && (reply.Err == OK || reply.Err == ErrNoKey) {
+					ck.sequenceNum++
+					return reply.Value
+				}
+				if ok && (reply.Err == ErrWrongGroup || reply.Err == ErrTimeout || reply.Err== ErrShardNotReady) {
+					time.Sleep(ClientRetryInterval)
+					ck.config = ck.sm.Query(-1)
+					continue
+				}
+				ck.leaderIds[gid] = (leader + 1) % int64(len(servers))
+			}else{
+				ck.leaderIds[gid]=0
+			}
 			for si := 0; si < len(servers); si++ {
-				srv := ck.make_end(servers[si])
+				srv := ck.make_end(servers[ck.leaderIds[gid]])
 				var reply GetReply
 				ok := srv.Call("ShardKV.Get", &args, &reply)
 				if ok && (reply.Err == OK || reply.Err == ErrNoKey) {
+					ck.sequenceNum++
 					return reply.Value
 				}
-				if ok && (reply.Err == ErrWrongGroup) {
+				// 如果是这些错误，那么不代表leader错误，因此直接跳出来，不会改变leaderId
+				if ok && (reply.Err == ErrWrongGroup || reply.Err == ErrTimeout || reply.Err == ErrShardNotReady) {
 					break
 				}
-				// ... not ok, or ErrWrongLeader
+				// ... not ok, or ErrWrongLeader,因此开始判断下一个
+				ck.leaderIds[gid] = (ck.leaderIds[gid] + 1) % int64(len(servers))
 			}
 		}
+		// 这个服务器不行，下次再来
 		time.Sleep(100 * time.Millisecond)
-		// ask controller for the latest configuration.
+		// 获取最新的配置
 		ck.config = ck.sm.Query(-1)
 	}
-
-	return ""
 }
 
-// shared by Put and Append.
-// You will have to modify this function.
 func (ck *Clerk) PutAppend(key string, value string, op string) {
-	args := PutAppendArgs{}
-	args.Key = key
-	args.Value = value
-	args.Op = op
-
-
+	args := PutAppendArgs{
+		Key:   key,
+		Value: value,
+		Op:    op,
+		ClientId: ck.clientId,
+		SequenceNum: ck.sequenceNum,
+	}
 	for {
 		shard := key2shard(key)
 		gid := ck.config.Shards[shard]
 		if servers, ok := ck.config.Groups[gid]; ok {
+			if leader, ok := ck.leaderIds[gid]; !ok {
+				leader_srv := ck.make_end(servers[leader])
+				var reply GetReply
+				ok := leader_srv.Call("ShardKV.PutAppend", &args, &reply)
+				if ok && (reply.Err == OK || reply.Err == ErrNoKey) {
+					ck.sequenceNum++
+					return
+				}
+				if ok && (reply.Err == ErrWrongGroup || reply.Err == ErrShardNotReady  || reply.Err == ErrTimeout) {
+					time.Sleep(ClientRetryInterval)
+					
+					ck.config = ck.sm.Query(-1)
+					continue
+				}
+				ck.leaderIds[gid] = (leader + 1) % int64(len(servers))
+			} else {
+				ck.leaderIds[gid] = 0
+			}
 			for si := 0; si < len(servers); si++ {
-				srv := ck.make_end(servers[si])
+				srv := ck.make_end(servers[ck.leaderIds[gid]])
 				var reply PutAppendReply
 				ok := srv.Call("ShardKV.PutAppend", &args, &reply)
 				if ok && reply.Err == OK {
+					ck.sequenceNum++
 					return
 				}
-				if ok && reply.Err == ErrWrongGroup {
+				if ok && (reply.Err == ErrWrongGroup || reply.Err == ErrTimeout || reply.Err == ErrShardNotReady) {
 					break
 				}
 				// ... not ok, or ErrWrongLeader
+				ck.leaderIds[gid] = (ck.leaderIds[gid] + 1) % int64(len(servers))
 			}
 		}
 		time.Sleep(100 * time.Millisecond)
-		// ask controller for the latest configuration.
+		// 获取最新的配置
 		ck.config = ck.sm.Query(-1)
 	}
 }
