@@ -17,11 +17,12 @@ type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
-	Key string 
-	Value string 
+	CmdType int8 // Get、Put、Append、
 	ClientId int64 
 	SequenceNum int64
-	CmdType int8 	// Get、Put、Append、
+	Key string 
+	Value string 
+		
 }
 
 type OpReply struct {
@@ -89,7 +90,6 @@ func (kv *ShardKV) waitCmd(index int64,cmd Op) OpReply{
 		return res
 	}
 }
-
 func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 	kv.mu.Lock()
 	if !kv.isLeader() {
@@ -109,18 +109,18 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 		return
 	}
 	// 重复请求
-	if args.SequenceNum <= kv.clientSequences[args.ClientId] {
+	if args.SequenceNum <= kv.clientSequences[args.ClientId]{
 		reply.Value = kv.kv[args.Key]
 		reply.Err = OK
 		kv.mu.Unlock()
 		return
 	}
 	kv.mu.Unlock()
-	cmd := Op{
-		CmdType:    GetCmd,
-		Key:        args.Key,
-		ClientId:   args.ClientId,
+	cmd := Op {
+		CmdType: GetCmd,
+		ClientId: args.ClientId,
 		SequenceNum: args.SequenceNum,
+		Key: args.Key,
 	}
 	index,_,isleader := kv.rf.Start(cmd)
 	if !isleader{
@@ -130,6 +130,7 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 	res := kv.waitCmd(int64(index),cmd)
 	reply.Err,reply.Value = res.Err,res.Value 
 }
+
 
 func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	kv.mu.Lock()
