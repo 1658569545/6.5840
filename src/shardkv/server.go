@@ -116,6 +116,7 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 		kv.mu.Unlock()
 		return
 	}
+	kv.mu.Unlock()
 	cmd := Op{
 		CmdType:    GetCmd,
 		Key:        args.Key,
@@ -125,7 +126,6 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 	index,_,isleader := kv.rf.Start(cmd)
 	if !isleader{
 		reply.Err = ErrWrongLeader
-		kv.mu.Unlock()
 		return
 	}
 	res := kv.waitCmd(int64(index),cmd)
@@ -153,10 +153,10 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// 重复请求
 	if args.SequenceNum <= kv.clientSequences[args.ClientId]{
 		reply.Err = OK
-		
 		kv.mu.Unlock()
 		return
 	}
+	kv.mu.Unlock()
 	cmd := Op{
 		Key:        args.Key,
 		ClientId:   args.ClientId,
@@ -173,7 +173,6 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	index,_,isleader := kv.rf.Start(cmd)
 	if !isleader{
 		reply.Err = ErrWrongLeader
-		kv.mu.Unlock()
 		return
 	}
 	res := kv.waitCmd(int64(index),cmd)
@@ -383,7 +382,7 @@ func (kv *ShardKV) watiCmd(index int64,cmd Op) OpReply{
 }
 
 // 检查分片状态
-// return (valid, ready)，本组是否拥有、分片是否处于正常状态
+// return (valid, ready)，分片是否属于本组、分片是否处于正常状态
 func (kv *ShardKV) checkShard(key string) (bool,bool){
 	shardId :=key2shard(key)
 	if kv.curConfig.Shards[shardId] !=kv.gid{
