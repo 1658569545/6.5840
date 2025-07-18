@@ -188,23 +188,21 @@ func (kv *ShardKV) InstallShard(args* InstallShardArgs, reply *InstallShardReply
 		return
 	}
 	if kv.curConfig.Num < args.Num {
-		// 本地配置落后，不接收分片，因为可能在旧配置中，这些分片还不是我的
 		reply.Err = OK
 		kv.mu.Unlock()
 		return
 	}
-	if kv.curConfig.Num > args.Num{
-		// 对方发来的配置落后，通知对方删除掉这个分片数据，因为分片迁移已经完成（必须要完成上个配置的迁移之后，才能整体完成迁移）
+	if kv.curConfig.Num > args.Num {
+		reply.Err = OK
 		kv.mu.Unlock()
 		deleteArgs := kv.generateDeleteShardArgs(args)
 		go kv.sendDeleteShard(&deleteArgs)
+		return
 	}
-	
-	for _,shardId := range args.Shards{
-		if kv.shardStates[shardId]!=Pulling{
+	for _, shard := range args.Shards {
+		if kv.shardStates[shard] != Pulling {
 			reply.Err = OK
 			kv.mu.Unlock()
-			// 删除数据
 			deleteArgs := kv.generateDeleteShardArgs(args)
 			go kv.sendDeleteShard(&deleteArgs)
 			return
@@ -221,9 +219,9 @@ func (kv *ShardKV) InstallShard(args* InstallShardArgs, reply *InstallShardReply
 	kv.mu.Lock()
 	kv.waitChannels[int64(index)] = ch
 	kv.mu.Unlock()
-	select{
-	case res:= <- ch:
-		if res.Err == OK{
+	select {
+	case res := <-ch:
+		if res.Err == OK {
 			reply.Err = OK
 			deleteArgs := kv.generateDeleteShardArgs(args)
 			go kv.sendDeleteShard(&deleteArgs)
@@ -231,16 +229,16 @@ func (kv *ShardKV) InstallShard(args* InstallShardArgs, reply *InstallShardReply
 			delete(kv.waitChannels, int64(index))
 			kv.mu.Unlock()
 			return
-		}else{
+		} else {
 			reply.Err = res.Err
 			kv.mu.Lock()
 			delete(kv.waitChannels, int64(index))
 			kv.mu.Unlock()
 			return
 		}
-	case <- time.After(500 * time.Millisecond):
+	case <-time.After(500 * time.Millisecond):
 		reply.Err = ErrTimeout
-		return 
+		return
 	}
 }
 
@@ -296,38 +294,38 @@ func (kv *ShardKV) DeleteShard(args *DeleteShardArgs,reply* DeleteShardReply){
 }
 
 //---------------------------------------------------- RPC 发送 ----------------------------------------------------
-func (kv *ShardKV) sendInstallShard(args InstallShardArgs){
-	for _,server := range args.Dest{
-		src:= kv.make_end(server)
+func (kv *ShardKV) sendInstallShard(args InstallShardArgs) {
+	for _, server := range args.Dest {
+		srv := kv.make_end(server)
 		var reply InstallShardReply
-		ok:= src.Call("ShardKV.InstallShard", &args, &reply)
-		if ok&& reply.Err == OK{
-			return 
+		ok := srv.Call("ShardKV.InstallShard", &args, &reply)
+		if ok && reply.Err == OK {
+			return
 		}
 	}
 }
 
-func (kv *ShardKV) generateDeleteShardArgs(args* InstallShardArgs) DeleteShardArgs{
-	arg:= DeleteShardArgs{
-		Num:args.Num,
-		Dest:args.Src,
-		Src:args.Dest,
-		Shards:args.Shards,
-		Keys:make([]string,0),
+func (kv *ShardKV) generateDeleteShardArgs(args *InstallShardArgs) DeleteShardArgs {
+	arg := DeleteShardArgs {
+		Num: args.Num,
+		Dest: args.Src,
+		Src: args.Dest,
+		Shards: args.Shards,
+		Keys: make([]string, 0),
 	}
-	for k:= range args.Data{
-		arg.Keys = append(arg.Keys,k)
+	for k := range args.Data {
+		arg.Keys = append(arg.Keys, k)
 	}
 	return arg
 }
 
-func (kv *ShardKV) sendDeleteShard(args *DeleteShardArgs){
-	for _,server := range args.Dest{
-		src:= kv.make_end(server)
+func (kv *ShardKV) sendDeleteShard(args *DeleteShardArgs) {
+	for _, server := range args.Dest {
+		srv := kv.make_end(server)
 		var reply DeleteShardReply
-		ok:= src.Call("ShardKV.DeleteShard", args, &reply)
-		if ok&& reply.Err == OK{
-			return 
+		ok := srv.Call("ShardKV.DeleteShard", args, &reply)
+		if ok && reply.Err == OK {
+			return
 		}
 	}
 }
@@ -404,14 +402,14 @@ func (kv *ShardKV) isRepeated(clientId,sequenceNum int64) bool{
 }
 
 // 生成快照
-func (kv *ShardKV) getSnapShot()[]byte{
-	w := new (bytes.Buffer)
-	enc := labgob.NewEncoder(w)
-	enc.Encode(kv.kv)
-	enc.Encode(kv.clientSequences)
-	enc.Encode(kv.shardStates)
-	enc.Encode(kv.curConfig)
-	enc.Encode(kv.lastConfig)
+func (kv *ShardKV) getSnapShot() []byte {
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(kv.clientSequences)
+	e.Encode(kv.kv)
+	e.Encode(kv.shardStates)
+	e.Encode(kv.lastConfig)
+	e.Encode(kv.curConfig)
 	snapshot := w.Bytes()
 	return snapshot
 }
@@ -433,17 +431,16 @@ func (kv *ShardKV) readSnapShot(data []byte){
 // ------------ Put/Append/Get处理
 func (kv *ShardKV) handleOps (op Op) OpReply{
 	clientId := op.ClientId 
-	vaild,ready:=kv.checkShard(op.Key)
-	if !vaild{
+	valid,ready:=kv.checkShard(op.Key)
+	if !valid {
 		return OpReply{
 			CmdType: op.CmdType,
 			ClientId: op.ClientId,
 			SequenceNum: op.SequenceNum,
-			
-			Err : ErrWrongGroup,
+			Err: ErrWrongGroup,
 		}
 	}
-	if !ready{
+	if !ready {
 		return OpReply{
 			CmdType: op.CmdType,
 			ClientId: op.ClientId,
@@ -451,7 +448,7 @@ func (kv *ShardKV) handleOps (op Op) OpReply{
 			Err: ErrShardNotReady,
 		}
 	}
-	if kv.isRepeated(op.ClientId,op.SequenceNum){
+	if kv.isRepeated(clientId,op.SequenceNum){
 		return OpReply{
 			CmdType: op.CmdType,
 			ClientId: op.ClientId,
@@ -512,23 +509,23 @@ func (kv *ShardKV) handleInstallShard(args InstallShardArgs)OpReply{
 		kv.kv[k]=v
 	}
 	// 客户去重表更新，需要更新全部的，因为是新的配置
-	for k,v := range args.ClientSequences{
-		if v > kv.clientSequences[k]{
+	for k, v := range args.ClientSequences {
+		if v > kv.clientSequences[k] {
 			kv.clientSequences[k] = v
 		}
 	}
-	// 最后需要更新状态
-	for _,shardId := range args.Shards{
-		kv.shardStates[shardId] = Serving
+	// 最后需要更新分片状态
+	for _, shard := range args.Shards {
+		kv.shardStates[shard] = Serving
 	}
-	return OpReply{
-		Err : OK,
+	return OpReply {
+		Err: OK,
 	}
 }
 
-func (kv *ShardKV)hasServingState(shardIds []int) bool{
-	for _,shardId := range shardIds{
-		if kv.shardStates[shardId] == Serving{
+func (kv *ShardKV) hasServingState(shards []int) bool {
+	for _, shard := range shards {
+		if kv.shardStates[shard] == Serving {
 			return true
 		}
 	}
@@ -537,28 +534,28 @@ func (kv *ShardKV)hasServingState(shardIds []int) bool{
 
 // ------------ 分片删除处理
 func (kv *ShardKV) handleDeleteShard(args DeleteShardArgs)OpReply{
-	if args.Num < kv.lastConfig.Num{
-		return OpReply{
-			Err : OK,
+	if args.Num < kv.lastConfig.Num {
+		return OpReply {
+			Err: OK,
 		}
 	}
-	if args.Num > kv.curConfig.Num{
-		return OpReply{
-			Err : ErrShardNotReady,
+	if args.Num > kv.curConfig.Num {
+		return OpReply {
+			Err: ErrShardNotReady,
 		}
 	}
-	if kv.hasServingState(args.Shards){
+	if kv.hasServingState(args.Shards) {
 		// still need these shards
 		return OpReply{
-			Err : OK,
+			Err: OK,
 		}
 	}
 	for _,k := range args.Keys{
 		delete(kv.kv,k)
 	}
 	// 最后需要更新状态
-	for _,shard := range args.Shards{
-		kv.shardStates[shard] = Serving
+	for _,shardId := range args.Shards{
+		kv.shardStates[shardId] = Serving
 	}
 	return OpReply {
 		Err: OK,
@@ -567,8 +564,8 @@ func (kv *ShardKV) handleDeleteShard(args DeleteShardArgs)OpReply{
 
 // ------------ 分片状态更新
 func (kv *ShardKV) updateShardsState(){
-	if kv.lastConfig.Num == 0{
-		return 
+	if kv.lastConfig.Num == 0 {
+		return
 	}
 	for shard,gid := range kv.curConfig.Shards{
 		lastGid := kv.lastConfig.Shards[shard]
@@ -584,7 +581,7 @@ func (kv *ShardKV) updateShardsState(){
 
 // ------------ 配置更新处理
 func (kv *ShardKV) handleConfig(config shardctrler.Config){
-	if config.Num == kv.curConfig.Num+1 && kv.readyForNewSync(){
+	if config.Num == kv.curConfig.Num + 1 && kv.readyForNewSync() {
 		kv.lastConfig = kv.curConfig
 		kv.curConfig = config
 		kv.updateShardsState()
@@ -592,10 +589,10 @@ func (kv *ShardKV) handleConfig(config shardctrler.Config){
 }
 
 // ------------ 执行达成raft共识的日志
-func (kv* ShardKV)engineStart(){
-	for !kv.killed(){
-		msg:= <- kv.applyCh
-		if msg.CommandValid{
+func (kv *ShardKV) engineStart() {
+	for !kv.killed() {
+		msg := <-kv.applyCh
+		if msg.CommandValid {
 			kv.mu.Lock()
 			var res OpReply
 			if _, ok := msg.Command.(Op); ok {
@@ -608,7 +605,7 @@ func (kv* ShardKV)engineStart(){
 				// DeleteShard
 				res = kv.handleDeleteShard(msg.Command.(DeleteShardArgs))
 			} else if _, ok := msg.Command.(shardctrler.Config); ok {
-				// Config handle
+				// Config 
 				res = OpReply{
 					Err: OK,
 				}
@@ -617,14 +614,13 @@ func (kv* ShardKV)engineStart(){
 				kv.mu.Unlock()
 				continue
 			}
-			ch ,ok := kv.waitChannels[int64(msg.CommandIndex)]
-			if ok{
+			ch, ok := kv.waitChannels[int64(msg.CommandIndex)]
+			if ok {
 				ch <- res
-				
 			}
 			kv.snapshotIndex = msg.CommandIndex
 			kv.mu.Unlock()
-		}else if msg.SnapshotValid{
+		} else if msg.SnapshotValid {
 			kv.mu.Lock()
 			kv.readSnapShot(msg.Snapshot)
 			kv.mu.Unlock()
@@ -670,16 +666,6 @@ func (kv *ShardKV) needReconfigure() bool {
 	return false
 }
 
-/*
-type InstallShardArgs struct{
-	Num int 			// 配置号（Config.Num），表示这是第几个配置
-	Dest []string 		// 目标group的服务器列表
-	Src []string 		// 源group的服务器列表
-	Shards []int 		// 要迁移的Shards列表
-	ClientSequences map[int64]int64 	// 客户端去重表
-	Data map[string]string 			// 分片内的所有k/v数据
-}
-*/
 
 func (kv *ShardKV) prepareInstallShardArgs() []InstallShardArgs {
 	misplacedShards := make(map[int][]int)
