@@ -25,9 +25,9 @@ const NShards = 10
 type Config struct {
 	Num    int             
 	// shard<---->group 
-	Shards [NShards]int     // shard -> gid
+	Shards [NShards]int     
 	// group<---->servers
-	Groups map[int][]string // gid -> servers[]
+	Groups map[int][]string 
 }
 
 const (

@@ -20,19 +20,13 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 	return
 }
 
-
 type Op struct {
-	// Your definitions here.
-	// Field names must start with capital letters,
-	// otherwise RPC will break.
 	SeqId int 
 	ClientId int64
 	Key string
 	Value string
-	// 操作类型
-	OpType string
-	// raft传过来的日志索引，一个日志索引对应一个通道
-	Index int 
+	OpType string  // Put/Append/Get
+	Index int 	// Raft日志索引，一个日志对应一个通道
 }
 
 type KVServer struct {
@@ -55,14 +49,7 @@ type KVServer struct {
 	currentBytes int
 }
 
-// the tester calls Kill() when a KVServer instance won't
-// be needed again. for your convenience, we supply
-// code to set rf.dead (without needing a lock),
-// and a killed() method to test rf.dead in
-// long-running loops. you can also add your own
-// code to Kill(). you're not required to do anything
-// about this, but it may be convenient (for example)
-// to suppress debug output from a Kill()ed instance.
+
 func (kv *KVServer) Kill() {
 	atomic.StoreInt32(&kv.dead, 1)
 	kv.rf.Kill()
@@ -173,8 +160,6 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
-	// Your code here.
-	// Your code here.
 	if kv.killed(){
 		reply.Err = ErrWrongLeader
 		return 
@@ -256,7 +241,6 @@ func (kv* KVServer) applyMsgLoop() {
 			if msg.CommandValid{
 				op:=msg.Command.(Op)
 				index := msg.CommandIndex
-				
 				if !kv.isRepeat(op.ClientId, op.SeqId){
 					kv.mu.Lock()
 					switch op.OpType{
@@ -268,21 +252,16 @@ func (kv* KVServer) applyMsgLoop() {
 					kv.seqMap[op.ClientId]=op.SeqId
 					kv.mu.Unlock()
 				}
-
-				// 需要进行快照压缩
-				// RaftStateSize获取当前Raft日志中已经使用了多少内存，大了的话就直接压缩
+				// Raft状态机大小超过阈值，生成快照
 				if kv.maxraftstate!=-1 && kv.persister.RaftStateSize() > kv.maxraftstate{
-					// 将快照中kv数据库中的数据进行持久化
 					snapshot := kv.PersistSnapShot()
-					// 将快照的最后Index和快照数据传给Raft日志
+					// 快照应用给Raft
 					kv.rf.Snapshot(msg.CommandIndex, snapshot)
 				}
 				// 将结果压到通道里面
 				kv.getWaitCh(index) <- op
 			}else if msg.SnapshotValid{
-				// 如果是Raft那边对于这个数据是直接从快照里面读取的话，就可以直接读快照
 				kv.mu.Lock()
-				// 读取快照的数据
 				kv.ReadSnapShot(msg.Snapshot)
 				kv.mu.Unlock()
 			}
@@ -290,9 +269,7 @@ func (kv* KVServer) applyMsgLoop() {
 	}
 }
 
-// unreliable net, restarts, partitions, snapshots, random keys, many clients
-
-// 将快照中的数据持久化
+// 序列化数据，并生成快照
 func (kv *KVServer) PersistSnapShot() []byte {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
@@ -304,7 +281,7 @@ func (kv *KVServer) PersistSnapShot() []byte {
 	return data
 }
 
-// 读取快照中的数据
+// 反序列化快照中的数据
 func (kv *KVServer) ReadSnapShot(snapshot []byte) {
 	if snapshot == nil || len(snapshot) < 1 {
 		return

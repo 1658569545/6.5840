@@ -56,7 +56,7 @@ func (ck *Clerk) Get(key string) string {
 		reply := GetReply{}
 		ok := ck.servers[lastLeaderId].Call("KVServer.Get", &args, &reply)
 		if ok{
-			if reply.Err ==ErrNoKey{
+			if reply.Err == ErrNoKey{
 				ck.leaderId = lastLeaderId
 				return ""
 			}else if reply.Err == OK{

@@ -12,7 +12,6 @@ import "sync"
 
 type Clerk struct {
 	servers []*labrpc.ClientEnd
-	// 客户端ID/SeqId用来判断请求是否重复
 	clientId int64
 	seqId   int
 
