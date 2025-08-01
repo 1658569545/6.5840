@@ -241,6 +241,7 @@ func (kv* KVServer) applyMsgLoop() {
 			if msg.CommandValid{
 				op:=msg.Command.(Op)
 				index := msg.CommandIndex
+				
 				if !kv.isRepeat(op.ClientId, op.SeqId){
 					kv.mu.Lock()
 					switch op.OpType{
@@ -252,6 +253,7 @@ func (kv* KVServer) applyMsgLoop() {
 					kv.seqMap[op.ClientId]=op.SeqId
 					kv.mu.Unlock()
 				}
+					
 				// Raft状态机大小超过阈值，生成快照
 				if kv.maxraftstate!=-1 && kv.persister.RaftStateSize() > kv.maxraftstate{
 					snapshot := kv.PersistSnapShot()

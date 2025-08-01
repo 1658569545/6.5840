@@ -726,6 +726,8 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	return index, term, isLeader
 }
 
+// 检查当前leader是否有当前任期的日志条目
+// 有就返回true
 func (rf *Raft) CheckEmptyTermLog() bool {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()

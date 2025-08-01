@@ -71,43 +71,31 @@ func (ck *Clerk) Get(key string) string {
 		shard := key2shard(key)
 		gid := ck.config.Shards[shard]
 		if servers, ok := ck.config.Groups[gid]; ok {
-			// **********这一段很迷惑
-			if leader,ok := ck.leaderIds[gid]; !ok{
-				leader_srv := ck.make_end(servers[leader])
+			if _,ok := ck.leaderIds[gid]; !ok {
+				ck.leaderIds[gid] = 0
+			}
+			oldLeaderId := ck.leaderIds[gid]
+			newLeaderId := oldLeaderId
+			for {
 				var reply GetReply
-				ok := leader_srv.Call("ShardKV.Get", &args, &reply)
+				ok := ck.make_end(servers[newLeaderId]).Call("ShardKV.Get", &args, &reply)
 				if ok && (reply.Err == OK || reply.Err == ErrNoKey) {
 					ck.sequenceNum++
 					return reply.Value
-				}
-				if ok && (reply.Err == ErrWrongGroup || reply.Err == ErrTimeout || reply.Err== ErrShardNotReady) {
-					time.Sleep(ClientRetryInterval)
+				} else if ok && (reply.Err == ErrWrongGroup || reply.Err == ErrShardNotReady  || reply.Err == ErrTimeout) {
 					ck.config = ck.sm.Query(-1)
+					break
+				} else {
+					newLeaderId = (newLeaderId + 1) % int64(len(servers))
+					if newLeaderId == oldLeaderId {
+						break
+					}
 					continue
 				}
-				ck.leaderIds[gid] = (leader + 1) % int64(len(servers))
-			}else{
-				ck.leaderIds[gid]=0
-			}
-			for si := 0; si < len(servers); si++ {
-				srv := ck.make_end(servers[ck.leaderIds[gid]])
-				var reply GetReply
-				ok := srv.Call("ShardKV.Get", &args, &reply)
-				if ok && (reply.Err == OK || reply.Err == ErrNoKey) {
-					ck.sequenceNum++
-					return reply.Value
-				}
-				// 如果是这些错误，那么不代表leader错误，因此直接跳出来，不会改变leaderId
-				if ok && (reply.Err == ErrWrongGroup || reply.Err == ErrTimeout || reply.Err == ErrShardNotReady) {
-					break
-				}
-				// ... not ok, or ErrWrongLeader,因此开始判断下一个
-				ck.leaderIds[gid] = (ck.leaderIds[gid] + 1) % int64(len(servers))
 			}
 		}
-		// 这个服务器不行，下次再来
 		time.Sleep(100 * time.Millisecond)
-		// 获取最新的配置
+		// 重新获取配置
 		ck.config = ck.sm.Query(-1)
 	}
 }
@@ -124,41 +112,31 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		shard := key2shard(key)
 		gid := ck.config.Shards[shard]
 		if servers, ok := ck.config.Groups[gid]; ok {
-			if leader, ok := ck.leaderIds[gid]; !ok {
-				leader_srv := ck.make_end(servers[leader])
-				var reply GetReply
-				ok := leader_srv.Call("ShardKV.PutAppend", &args, &reply)
-				if ok && (reply.Err == OK || reply.Err == ErrNoKey) {
-					ck.sequenceNum++
-					return
-				}
-				if ok && (reply.Err == ErrWrongGroup || reply.Err == ErrShardNotReady  || reply.Err == ErrTimeout) {
-					time.Sleep(ClientRetryInterval)
-					
-					ck.config = ck.sm.Query(-1)
-					continue
-				}
-				ck.leaderIds[gid] = (leader + 1) % int64(len(servers))
-			} else {
+			if _,ok := ck.leaderIds[gid]; !ok {
 				ck.leaderIds[gid] = 0
 			}
-			for si := 0; si < len(servers); si++ {
-				srv := ck.make_end(servers[ck.leaderIds[gid]])
+			oldLeaderId := ck.leaderIds[gid]
+			newLeaderId := oldLeaderId
+			for {
 				var reply PutAppendReply
-				ok := srv.Call("ShardKV.PutAppend", &args, &reply)
+				ok := ck.make_end(servers[newLeaderId]).Call("ShardKV.PutAppend", &args, &reply)
 				if ok && reply.Err == OK {
 					ck.sequenceNum++
 					return
-				}
-				if ok && (reply.Err == ErrWrongGroup || reply.Err == ErrTimeout || reply.Err == ErrShardNotReady) {
+				} else if ok && (reply.Err == ErrWrongGroup || reply.Err == ErrShardNotReady  || reply.Err == ErrTimeout) {
+					ck.config = ck.sm.Query(-1)
 					break
+				} else {
+					newLeaderId = (newLeaderId + 1) % int64(len(servers))
+					if newLeaderId == oldLeaderId {
+						break
+					}
+					continue
 				}
-				// ... not ok, or ErrWrongLeader
-				ck.leaderIds[gid] = (ck.leaderIds[gid] + 1) % int64(len(servers))
 			}
 		}
 		time.Sleep(100 * time.Millisecond)
-		// 获取最新的配置
+		// 重新获取配置
 		ck.config = ck.sm.Query(-1)
 	}
 }

@@ -43,7 +43,7 @@ type ShardKV struct {
 	dead    int32 // set by Kill()
 
 	ctrlers      []*labrpc.ClientEnd 	// 所有shardctrler的RPC连接
-	maxraftstate int // snapshot if log grows this big
+	maxraftstate int // raft日志大小限制
 
 	// Your definitions here.
 
@@ -178,7 +178,7 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	reply.Err = res.Err
 }
 
-// 接收迁移的分片
+// 接收来自args.Src Group的分片
 func (kv *ShardKV) InstallShard(args* InstallShardArgs, reply *InstallShardReply){
 	kv.mu.Lock()
 	if !kv.isLeader() {
@@ -191,9 +191,11 @@ func (kv *ShardKV) InstallShard(args* InstallShardArgs, reply *InstallShardReply
 		kv.mu.Unlock()
 		return
 	}
+	// 旧配置
 	if kv.curConfig.Num > args.Num {
 		reply.Err = OK
 		kv.mu.Unlock()
+		// 制作删除分片RPC的args
 		deleteArgs := kv.generateDeleteShardArgs(args)
 		go kv.sendDeleteShard(&deleteArgs)
 		return
@@ -202,6 +204,7 @@ func (kv *ShardKV) InstallShard(args* InstallShardArgs, reply *InstallShardReply
 		if kv.shardStates[shard] != Pulling {
 			reply.Err = OK
 			kv.mu.Unlock()
+			// 接收来自args.Src的分片之后，需要删除掉原来的
 			deleteArgs := kv.generateDeleteShardArgs(args)
 			go kv.sendDeleteShard(&deleteArgs)
 			return
@@ -254,6 +257,7 @@ func (kv *ShardKV) DeleteShard(args *DeleteShardArgs,reply* DeleteShardReply){
 		kv.mu.Unlock()
 		return
 	}
+	// 遍历要删除的分片，来查看分片的状态，分片删除之后，分片状态不会删除
 	for _, shard := range args.Shards {
 		if kv.shardStates[shard] != Offering {
 			reply.Err = OK
@@ -262,6 +266,7 @@ func (kv *ShardKV) DeleteShard(args *DeleteShardArgs,reply* DeleteShardReply){
 		}
 	}
 	kv.mu.Unlock()
+
 	index, _, isleader := kv.rf.Start(*args)
 	if !isleader{
 		reply.Err = ErrWrongLeader
@@ -351,11 +356,8 @@ func (kv *ShardKV) isLeader() bool {
 	return kv.rf.IsLeader()
 }
 
-// 等待raft日志的应用结果
-
-
 // 检查分片状态
-// return (valid, ready)，分片是否属于本组、分片是否处于正常状态
+// return (valid, ready)，分片是否属于本组、分片是否处于正常可用状态
 func (kv *ShardKV) checkShard(key string) (bool,bool){
 	shardId :=key2shard(key)
 	if kv.curConfig.Shards[shardId] !=kv.gid{
@@ -376,7 +378,7 @@ func (kv *ShardKV) isRepeated(clientId,sequenceNum int64) bool{
 	return false
 }
 
-// 生成快照
+// 序列化数据，生成快照
 func (kv *ShardKV) getSnapShot() []byte {
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
@@ -389,7 +391,7 @@ func (kv *ShardKV) getSnapShot() []byte {
 	return snapshot
 }
 
-// 读取快照中的数据
+// 反序列化快照中的数据
 func (kv *ShardKV) readSnapShot(data []byte){
 	r := bytes.NewBuffer(data)
 	d := labgob.NewDecoder(r)
@@ -474,6 +476,7 @@ func (kv *ShardKV) handleInstallShard(args InstallShardArgs)OpReply{
 			Err : ErrShardNotReady,
 		}
 	}
+	// 说明已经更新完成了
 	if kv.allServing(args.Shards){
 		return OpReply{
 			Err : OK,
@@ -483,7 +486,7 @@ func (kv *ShardKV) handleInstallShard(args InstallShardArgs)OpReply{
 	for k,v := range args.Data{
 		kv.kv[k]=v
 	}
-	// 客户去重表更新，需要更新全部的，因为是新的配置
+	// 更新客户端序列号
 	for k, v := range args.ClientSequences {
 		if v > kv.clientSequences[k] {
 			kv.clientSequences[k] = v
@@ -675,6 +678,7 @@ func (kv *ShardKV) prepareInstallShardArgs() []InstallShardArgs {
 	return args
 }
 
+// 发送分片
 func (kv *ShardKV) sendShards() {
 	for !kv.killed() {
 		kv.mu.Lock()
@@ -692,8 +696,6 @@ func (kv *ShardKV) sendShards() {
 	}
 }
 
-//---------------------------------------------------- go routine部分 ----------------------------------------------------
-
 // 检查空任期
 func (kv *ShardKV) checkEmptyTerm() {
 	for !kv.killed() {
@@ -703,6 +705,7 @@ func (kv *ShardKV) checkEmptyTerm() {
 			time.Sleep(EmptyTermCheckInterval)
 			continue
 		}
+		// leader没有当前任期的日志条目，因此需要提交一个空日志
 		if !kv.rf.CheckEmptyTermLog() {
 			kv.mu.Unlock()
 			kv.rf.Start(EmptyOp{})

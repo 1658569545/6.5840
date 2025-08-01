@@ -88,7 +88,7 @@ type DeleteShardReply struct {
 }
 
 const (
-	Serving = 1		// 本组（gid）当前拥有该分片，且可以正常对外提供服务。
+	Serving = 1		// 本组（gid）当前拥有该分片，正常可用。
 	Pulling = 2		// 本组（gid）在新配置下将要拥有该分片，但还没有拿到数据，正在“拉取”分片数据
 	Offering = 3	// 本组（gid）在新配置下不再拥有该分片，但还没有把数据交给新 owner，正在“提供”分片数据。
 )
